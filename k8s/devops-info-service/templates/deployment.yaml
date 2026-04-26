@@ -1,0 +1,88 @@
+{{- if not .Values.rollout.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "devops-info-service.fullname" . }}
+  labels:
+    {{- include "devops-info-service.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "devops-info-service.selectorLabels" . | nindent 6 }}
+  strategy:
+    type: {{ .Values.strategy.type }}
+    rollingUpdate:
+      maxSurge: {{ .Values.strategy.rollingUpdate.maxSurge }}
+      maxUnavailable: {{ .Values.strategy.rollingUpdate.maxUnavailable }}
+  template:
+    metadata:
+      {{- if or .Values.vaultInjection.enabled (and .Values.podAnnotations (not (empty .Values.podAnnotations))) }}
+      annotations:
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if .Values.vaultInjection.enabled }}
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: {{ .Values.vaultInjection.role | quote }}
+        vault.hashicorp.com/agent-inject-secret-{{ .Values.vaultInjection.secretAlias }}: {{ .Values.vaultInjection.secretPath | quote }}
+        {{- end }}
+      {{- end }}
+      labels:
+        {{- include "devops-info-service.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- if .Values.vaultInjection.enabled }}
+      serviceAccountName: {{ include "devops-info-service.serviceAccountName" . }}
+      {{- end }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.targetPort }}
+              protocol: TCP
+          envFrom:
+            {{- if .Values.credentials.enabled }}
+            - secretRef:
+                name: {{ include "devops-info-service.credentialsSecretName" . }}
+            {{- end }}
+            - configMapRef:
+                name: {{ include "devops-info-service.configMapEnvName" . }}
+          env:
+            {{- with .Values.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+            - name: VISITS_FILE
+              value: {{ printf "%s/%s" .Values.persistence.mountPath .Values.persistence.fileName | quote }}
+          volumeMounts:
+            - name: config-volume
+              mountPath: {{ .Values.config.fileMountPath | quote }}
+              readOnly: true
+            - name: data-volume
+              mountPath: {{ .Values.persistence.mountPath | quote }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          livenessProbe:
+            {{- toYaml .Values.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.readinessProbe | nindent 12 }}
+      volumes:
+        - name: config-volume
+          configMap:
+            name: {{ include "devops-info-service.configMapFileName" . }}
+        - name: data-volume
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "devops-info-service.pvcName" . }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+{{- end }}
